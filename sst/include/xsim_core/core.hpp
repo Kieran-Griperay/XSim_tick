@@ -1,14 +1,15 @@
 #pragma once
 
-
 #include <sst/core/component.h>
 // #include <sst/core/elementinfo.h>
 // SST datatypes
 #include <sst/core/sst_types.h>
 // SST output to print information
 #include <sst/core/output.h>
+
 // SST interface for memory
 #include <sst/core/interfaces/stdMem.h>
+
 // SST statistics
 #include <sst/core/statapi/stataccumulator.h>
 
@@ -34,16 +35,56 @@ class Core: public SST::Component
 			COMPONENT_CATEGORY_PROCESSOR
 		)
 
+		/*
+		{
+					"integer.number": 2,
+					"integer.resnumber": 4,
+					"integer.latency": 1
+					"divider.number": 1,
+					"divider.resnumber": 2,
+					"divider.latency": 20
+					"multiplier.number": 2,
+					"multiplier.resnumber": 4,
+					"multiplier.latency": 10
+
+					"ls.number": 1,
+					"ls.resnumber": 8,
+					"ls.latency": 3
+
+					"cache": {
+						"associativity": 1,
+						"size": "4096B"
+					},
+					"clock":"1GHz"
+					}
+		*/
+
 		SST_ELI_DOCUMENT_PARAMS(
-			{ "verbose", "(uint) Verbosity for debugging. Increased numbers for increased verbosity.", "0" },
-			{ "clock_frequency", "(string) Sets the clock of the core in Hz", "0"} ,
-			{ "program", "(infile) Path to program to be executed by the simulator", "REQUIRED"} ,
-			{ "liz", "(uint) Latency of the liz instruction", "1"} ,
-			{ "put", "(uint) Latency of the put instruction", "1"} ,
-			{ "sw", "(uint) Latency of the sw instruction", "1"} ,
-			{ "lw", "(uint) Latency of the lw instruction", "1"} ,
-			{ "halt", "(uint) Latency of the halt instruction", "1"}
+			{ "integer.number", "(uint) Number of integer units", "2" },
+			{ "integer.resnumber", "(uint) Number of integer reservation stations", "4" },
+			{ "integer.latency", "(uint) Latency of integer operations", "1" },
+			{ "divider.number", "(uint) Number of divider units", "1" },
+			{ "divider.resnumber", "(uint) Number of divider reservation stations", "2" },
+			{ "divider.latency", "(uint) Latency of divider operations", "20" },
+			{ "multiplier.number", "(uint) Number of multiplier units", "2" },
+			{ "multiplier.resnumber", "(uint) Number of multiplier reservation stations", "4" },
+			{ "multiplier.latency", "(uint) Latency of multiplier operations", "10" },
+			{ "ls.number", "(uint) Number of load/store units", "1" },
+			{ "ls.resnumber", "(uint) Number of load/store reservation stations", "8" },
+			{ "ls.latency", "(uint) Latency of load/store operations", "3" },
+			{ "cache.associativity", "(uint) Cache associativity", "1" },
+			{ "cache.size", "(string) Cache size", "4096B" },
+			{ "clock", "(string) Clock frequency", "1GHz" }
 		)
+			// { "verbose", "(uint) Verbosity for debugging. Increased numbers for increased verbosity.", "0" },
+			// { "clock_frequency", "(string) Sets the clock of the core in Hz", "0"} ,
+			// { "program", "(infile) Path to program to be executed by the simulator", "REQUIRED"} ,
+			// { "liz", "(uint) Latency of the liz instruction", "1"} ,
+			// { "put", "(uint) Latency of the put instruction", "1"} ,
+			// { "sw", "(uint) Latency of the sw instruction", "1"} ,
+			// { "lw", "(uint) Latency of the lw instruction", "1"} ,
+			// { "halt", "(uint) Latency of the halt instruction", "1"}
+		//)
 
 		// Statistics for our component
 		SST_ELI_DOCUMENT_STATISTICS(
@@ -100,6 +141,7 @@ class Core: public SST::Component
 		uint64_t total_instructions = 0;
 		uint64_t total_cycles = 0;
 		std::map<uint16_t, uint64_t> instruction_counts;
+		uint64_t reg_reads = 0;
 
 		/** CPU state **/
 		// The program counter

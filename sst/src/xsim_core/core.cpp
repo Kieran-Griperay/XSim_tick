@@ -18,6 +18,7 @@ namespace XSim
 {
 namespace Core
 {
+	
 
 
 
@@ -75,18 +76,13 @@ void Core::setup()
 void Core::finish()
 {
 	Json::Value root;
-	root["author"] = "kjg86";
-	Json::Value regs;
-    regs["r0"] = registers[0];
-    regs["r1"] = registers[1];
-    regs["r2"] = registers[2];
-    regs["r3"] = registers[3];
-    regs["r4"] = registers[4];
-    regs["r5"] = registers[5];
-    regs["r6"] = registers[6];
-    regs["r7"] = registers[7];
-    root["registers"] = regs;
-	Json::Value stats;
+
+	Json::Value integer;
+	Json::Value multiplier;
+	Json::Value divider;
+	Json::Value ls;
+
+    root["reg reads"] = reg_reads;
     
     for (auto const& [op, name] : names) {
         stats[name] = (Json::UInt64)instruction_counts[op]; 
@@ -272,7 +268,9 @@ std::array<uint16_t, 3> populateRInstructionRegisters(uint16_t instruction){
     
     return r_registers;
 }
-
+void incrementRegisterReads(int count){
+	reg_reads += count;
+}
 void Core::execute_instruction()
 {
 	// Better be aligned!!
@@ -294,6 +292,8 @@ void Core::execute_instruction()
 			uint16_t rt = r_registers[2]; 
 
 			registers[rd] = registers[rs] + registers[rt];
+			incrementRegisterReads(2);
+
 			pc += 2;
 			busy = false; 		
 			break;
@@ -306,6 +306,8 @@ void Core::execute_instruction()
 			uint16_t rt = r_registers[2]; 
 
 			registers[rd] = registers[rs] - registers[rt];
+			incrementRegisterReads(2);
+
 			pc += 2;
 			busy = false; 
 			break;
@@ -318,7 +320,7 @@ void Core::execute_instruction()
 			uint16_t rt = r_registers[2]; 
 
 			registers[rd] = registers[rs] & registers[rt];
-
+			incrementRegisterReads(2);
 			pc += 2;
 			busy = false; 
 			
@@ -332,7 +334,8 @@ void Core::execute_instruction()
 			uint16_t rt = r_registers[2]; 
 
 			registers[rd] = !(registers[rs] | registers[rt]);
-
+			incrementRegisterReads(2);
+			
 			pc += 2;
 			busy = false; 
 			
@@ -346,6 +349,8 @@ void Core::execute_instruction()
 			uint16_t rt = r_registers[2]; 
 
 			registers[rd] = registers[rs] / registers[rt];
+			incrementRegisterReads(2);
+
 
 			pc += 2;
 			busy = false; 
@@ -360,6 +365,8 @@ void Core::execute_instruction()
 			uint16_t rt = r_registers[2]; 
 
 			registers[rd] = (uint16_t) ((registers[rs] * registers[rt]) & 0xFF);
+			incrementRegisterReads(2);
+
 
 			pc += 2;
 			busy = false; 
@@ -374,6 +381,7 @@ void Core::execute_instruction()
 			uint16_t rt = r_registers[2]; 
 
 			registers[rd] = registers[rs] % registers[rt];
+			incrementRegisterReads(2);
 
 			pc += 2;
 			busy = false; 
@@ -388,6 +396,7 @@ void Core::execute_instruction()
 			uint16_t rt = r_registers[2]; 
 
 			registers[rd] = (uint16_t)std::pow(registers[rs], registers[rt]);
+			incrementRegisterReads(2);
 
 			pc += 2;
 			busy = false; 
@@ -406,6 +415,8 @@ void Core::execute_instruction()
 				busy = false;
 				waiting_memory = false;
 			});
+			incrementRegisterReads(1);
+
 			break;
 		case SW:
 			rs = (instruction >> 5) & 0x07;
@@ -417,6 +428,7 @@ void Core::execute_instruction()
 				busy = false;
 				waiting_memory = false;
 			});
+			incrementRegisterReads(1);
 			break;
 		case LIZ:
 			rd = (instruction >> 8) & 0x07;
@@ -436,6 +448,7 @@ void Core::execute_instruction()
             rd = (instruction >> 8) & 0x07;
             imm8 = instruction & 0xFF;
             registers[rd] = (imm8 << 8) | (registers[rd] & 0xFF);
+			incrementRegisterReads(1);
             pc += 2;
             busy = false;
             break;
@@ -444,6 +457,8 @@ void Core::execute_instruction()
             rs = (instruction >> 5) & 0x07;
             imm8 = instruction & 0xFF;
             if ((int16_t)registers[rs] > 0) pc = (imm8 << 1); else pc += 2;
+			incrementRegisterReads(1);
+
             busy = false;
             break;
         case BN: 
@@ -451,6 +466,8 @@ void Core::execute_instruction()
             rs = (instruction >> 5) & 0x07;
             imm8 = instruction & 0xFF;
             if ((int16_t)registers[rs] < 0) pc = (imm8 << 1); else pc += 2;
+			incrementRegisterReads(1);
+
             busy = false;
             break;
         case BX: 
@@ -458,6 +475,8 @@ void Core::execute_instruction()
             rs = (instruction >> 5) & 0x07;
             imm8 = instruction & 0xFF;
             if (registers[rs] != 0) pc = (imm8 << 1); else pc += 2;
+			incrementRegisterReads(1);
+
             busy = false;
             break;
         case BZ: 
@@ -465,11 +484,15 @@ void Core::execute_instruction()
             rs = (instruction >> 5) & 0x07;
             imm8 = instruction & 0xFF;
             if (registers[rs] == 0) pc = (imm8 << 1); else pc += 2;
+			incrementRegisterReads(1);
+
             busy = false;
             break;
 		case JR: 
             rs = (instruction >> 5) & 0x07;
             pc = registers[rs] & 0xFFFE;
+			incrementRegisterReads(1);
+
             busy = false;
             break;
         case JALR: 
@@ -477,6 +500,8 @@ void Core::execute_instruction()
             rs = (instruction >> 5) & 0x07;
             registers[rd] = pc + 2;
             pc = registers[rs] & 0xFFFE;
+			incrementRegisterReads(1);
+
             busy = false;
             break;
         case J: 
@@ -489,6 +514,8 @@ void Core::execute_instruction()
 		case PUT:
 			rs = (instruction >> 5) & 0x07;
 			std::cout<<"Register "<<(int)rs<<" = "<<registers[rs]<<"(unsigned) = "<<(int16_t)registers[rs]<<"(signed)"<<std::endl;
+			incrementRegisterReads(1);
+			
 			pc+=2;
 			busy = false;
 			break;

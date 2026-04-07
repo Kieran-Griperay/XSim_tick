@@ -10,34 +10,56 @@ parser.add_argument('--program',
                     action='store',
                     help='The program to run in the simulator')
 
-parser.add_argument('--latencies',
+parser.add_argument('--configuration',
                     dest="latencies",
                     required=True,
                     action='store',
                     help='The json file with the instruction latencies')
 
+
+parser.add_argument('--output',
+                    dest="output",
+                    required=True,
+                    action='store',
+                    help='The json file to store the output statistics')
 # Parse arguments
 args = parser.parse_args()
 
 ## Print info ##
 print("Running simulator using program "+args.program)
-print("Latencies in  "+args.latencies)
+print("Configuration in  "+args.configuration)
 
 #####################################
-#	Load JSON file with latencies	#
-#####################################
+#	Load JSON file with configs
+# SO
+##################################### 
 import json
-with open(args.latencies, 'r') as inp_file:
-  latencies=json.load(inp_file)
-print("Latencies:")
-print(json.dumps(latencies, indent=2))
-# Latencies will look like
+with open(args.configuration, 'r') as inp_file:
+  config=json.load(inp_file)
+print("configuration:")
+print(json.dumps(config, indent=2))
+
+# Example config
 # {
-#   "liz": 20,
-#   "sw": 150,
-#   "lw": 150,
-#   "put": 1000,
-#   "halt": 1,
+#   "integer.number": 2,
+#   "integer.resnumber": 4,
+#   "integer.latency": 1
+#   "divider.number": 1,
+#   "divider.resnumber": 2,
+#   "divider.latency": 20
+#   "multiplier.number": 2,
+#   "multiplier.resnumber": 4,
+#   "multiplier.latency": 10
+
+#   "ls.number": 1,
+#   "ls.resnumber": 8,
+#   "ls.latency": 3
+
+#   "cache": {
+#     "associativity": 1,
+#     "size": "4096B"
+#   },
+#   "clock":"1GHz"
 # }
 
 # Now the simulation
@@ -46,11 +68,12 @@ import sst
 # Add our core to the simulation!
 core = sst.Component("XSim","XSim.Core")
 core.addParams({
-  "clock_frequency": "3GHz",
+  "clock_frequency": "1GHz",
   "program": args.program,
   "verbose": 0
 })
-core.addParams(latencies)
+
+core.addParams(config)
 # Configure the memory interface in our CPU to use the standard interface
 iface = core.setSubComponent("memory", "memHierarchy.standardInterface")
 #iface.addParams({"debug" : 1, "debug_level" : 10})
@@ -65,6 +88,18 @@ memory.addParams(
 	'clock':		"1GHz",
 	"verbose" : 		2,
 	"addr_range_end":	64*1024-1,
+})
+
+# Now add cache to simulation
+cache = sst.Component("L1_cache", "memHierarchy.Cache")
+cache.addParams(
+{
+  "cache_line_size": "16",
+  "associativity": config["cache"]["associativity"],
+  "cache_size": config["cache"]["size"],
+  "cache_frequency": config["clock"],
+  "access_latency_cycles": 1,
+  "L1": "true",
 })
 
 # Memory access timing model we attach it to the memory backend
