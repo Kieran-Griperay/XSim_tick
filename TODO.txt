@@ -1,0 +1,14 @@
+TODO & Accomplishments
+
+Ryan:
+Accomplished:
+    - Connected cpu <-> cache <-> mem: config.py.
+    - Edited add_latencies to ap opcodes to instruction names and to respective functional unit latencies: core.cpp
+
+TODO:
+    - load/store unit FIFO queue
+
+Notes:
+    - Unsure if additional code is needed in memory_wrapper 
+        (I dont think so since cache is handled by SST, I just needed to hook it up?)
+    - Somebody doublecheck add_latencies

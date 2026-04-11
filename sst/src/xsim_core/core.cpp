@@ -30,7 +30,7 @@ Core::Core(ComponentId_t id, Params& params):
 	verbose = params.find<uint32_t>("verbose", verbose);
 
 	// clock_frequency is one of the configuration options for this component
-	clock_frequency=params.find<std::string>("clock_frequency",clock_frequency);
+	clock_frequency=params.find<std::string>("clock",clock_frequency);
 	this->registerTimeBase(clock_frequency, true );
 
 	// set instruction latencies
@@ -145,72 +145,72 @@ void Core::load_program(Params &params)
  */
 void Core::load_latencies(Params &params)
 {
-    latencies.insert({ADD, params.find<uint32_t>("add", 1)});
+	// Map opcodes to instruction names and to respective functional unit latencies
+    latencies.insert({ADD, params.find<uint32_t>("integer.latency", 1)});
     names.insert({ADD, "add"});
     
-    latencies.insert({SUB, params.find<uint32_t>("sub", 1)});
+    latencies.insert({SUB, params.find<uint32_t>("integer.latency", 1)});
     names.insert({SUB, "sub"});
     
-    latencies.insert({AND, params.find<uint32_t>("and", 1)});
+    latencies.insert({AND, params.find<uint32_t>("integer.latency", 1)});
     names.insert({AND, "and"});
     
-    latencies.insert({NOR, params.find<uint32_t>("nor", 1)});
+    latencies.insert({NOR, params.find<uint32_t>("integer.latency", 1)});
     names.insert({NOR, "nor"});
     
-    latencies.insert({DIV, params.find<uint32_t>("div", 1)});
+    latencies.insert({DIV, params.find<uint32_t>("divider.latency", 1)});
     names.insert({DIV, "div"});
     
-    latencies.insert({MUL, params.find<uint32_t>("mul", 1)});
+    latencies.insert({MUL, params.find<uint32_t>("multiplier.latency", 1)});
     names.insert({MUL, "mul"});
     
-    latencies.insert({MOD, params.find<uint32_t>("mod", 1)});
+    latencies.insert({MOD, params.find<uint32_t>("divider.latency", 1)});
     names.insert({MOD, "mod"});
     
-    latencies.insert({EXP, params.find<uint32_t>("exp", 1)});
+    latencies.insert({EXP, params.find<uint32_t>("divider.latency", 1)});
     names.insert({EXP, "exp"});
 
-    latencies.insert({LW, params.find<uint32_t>("lw", 1)});
+    latencies.insert({LW, params.find<uint32_t>("ls.latency", 1)});
     names.insert({LW, "lw"});
     
-    latencies.insert({SW, params.find<uint32_t>("sw", 1)});
+    latencies.insert({SW, params.find<uint32_t>("ls.latency", 1)});
     names.insert({SW, "sw"});
 
-    latencies.insert({LIZ, params.find<uint32_t>("liz", 1)});
+    latencies.insert({LIZ, params.find<uint32_t>("integer.latency", 1)});
     names.insert({LIZ, "liz"});
     
-    latencies.insert({LIS, params.find<uint32_t>("lis", 1)});
+    latencies.insert({LIS, params.find<uint32_t>("integer.latency", 1)});
     names.insert({LIS, "lis"});
     
-    latencies.insert({LUI, params.find<uint32_t>("lui", 1)});
+    latencies.insert({LUI, params.find<uint32_t>("integer.latency", 1)});
     names.insert({LUI, "lui"});
 
-    latencies.insert({BP, params.find<uint32_t>("bp", 1)});
-    names.insert({BP, "bp"});
-    
-    latencies.insert({BN, params.find<uint32_t>("bn", 1)});
-    names.insert({BN, "bn"});
-    
-    latencies.insert({BX, params.find<uint32_t>("bx", 1)});
-    names.insert({BX, "bx"});
-    
-    latencies.insert({BZ, params.find<uint32_t>("bz", 1)});
-    names.insert({BZ, "bz"});
-
-    latencies.insert({JR, params.find<uint32_t>("jr", 1)});
-    names.insert({JR, "jr"});
-    
-    latencies.insert({JALR, params.find<uint32_t>("jalr", 1)});
-    names.insert({JALR, "jalr"});
-    
-    latencies.insert({J, params.find<uint32_t>("j", 1)});
-    names.insert({J, "j"});
-
-    // --- System ---
-    latencies.insert({HALT, params.find<uint32_t>("halt", 1)});
+    latencies.insert({HALT, params.find<uint32_t>("integer.latency", 1)});
     names.insert({HALT, "halt"});
     
-    latencies.insert({PUT, params.find<uint32_t>("put", 1)});
+    latencies.insert({PUT, params.find<uint32_t>("integer.latency", 1)});
     names.insert({PUT, "put"});
+
+    // latencies.insert({BP, params.find<uint32_t>("bp", 1)});
+    // names.insert({BP, "bp"});
+    
+    // latencies.insert({BN, params.find<uint32_t>("bn", 1)});
+    // names.insert({BN, "bn"});
+    
+    // latencies.insert({BX, params.find<uint32_t>("bx", 1)});
+    // names.insert({BX, "bx"});
+    
+    // latencies.insert({BZ, params.find<uint32_t>("bz", 1)});
+    // names.insert({BZ, "bz"});
+
+    // latencies.insert({JR, params.find<uint32_t>("jr", 1)});
+    // names.insert({JR, "jr"});
+    
+    // latencies.insert({JALR, params.find<uint32_t>("jalr", 1)});
+    // names.insert({JALR, "jalr"});
+    
+    // latencies.insert({J, params.find<uint32_t>("j", 1)});
+    // names.insert({J, "j"});
 }
 
 bool Core::tick(Cycle_t cycle)

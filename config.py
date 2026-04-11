@@ -11,7 +11,7 @@ parser.add_argument('--program',
                     help='The program to run in the simulator')
 
 parser.add_argument('--configuration',
-                    dest="latencies",
+                    dest="configuration",
                     required=True,
                     action='store',
                     help='The json file with the instruction latencies')
@@ -68,7 +68,7 @@ import sst
 # Add our core to the simulation!
 core = sst.Component("XSim","XSim.Core")
 core.addParams({
-  "clock_frequency": "1GHz",
+  "clock_frequency": config["clock"],
   "program": args.program,
   "verbose": 0
 })
@@ -94,7 +94,7 @@ memory.addParams(
 cache = sst.Component("L1_cache", "memHierarchy.Cache")
 cache.addParams(
 {
-  "cache_line_size": "16",
+  "cache_line_size": 16,
   "associativity": config["cache"]["associativity"],
   "cache_size": config["cache"]["size"],
   "cache_frequency": config["clock"],
@@ -112,11 +112,17 @@ memory_timing.addParams({
 	"mem_size" : "64KiB"
 })
 
-# Now we need to connect the two components together, the link has a latency
-#	and can be assimetric (it's not in this case)
-cpu_data_memory_link = sst.Link("cpu_data_memory_link")
-cpu_data_memory_link.connect(
+# Connect CPU & cache
+cpu_cache_link = sst.Link("cpu_cache_link")
+cpu_cache_link.connect(
 	(iface,		"lowlink",	"500ps"),
+	(cache,	"highlink",	"500ps")
+)
+
+# Connect cache & memory
+cache_memory_link = sst.Link("cache_memory_link")
+cache_memory_link.connect(
+	(cache,		"lowlink",	"500ps"),
 	(memory,	"highlink",	"500ps")
 )
 
