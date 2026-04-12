@@ -1,3 +1,5 @@
 {
-	"reg reads" : 2
+	"cycles" : 11,
+	"reg reads" : 3,
+	"stalls" : 0
 }

@@ -83,6 +83,8 @@ void Core::finish()
 	Json::Value ls;
 
     root["reg reads"] = reg_reads;
+	root["stalls"] = stall_count;
+	root["cycles"] = cycle_count;
     
     // for (auto const& [op, name] : names) {
     //     stats[name] = (Json::UInt64)instruction_counts[op]; 
@@ -307,49 +309,55 @@ void Core::broadcast(int rs_id) {
         rename_table[rs.dest_reg] = -1;  // value is now in register file, so it can be marked ready
     }
 }
-void Core::handle_ls_completion(FunctionalUnit &fu, int rs_id) {
-    ReservationStation &rs = rs_all[rs_id];
-
-    if (!fu.memory_sent) {
-        if (memory_pending) return;  // only one pending at a time
-
-        memory_pending = true;
-        fu.memory_sent = true;
-
-        uint16_t addr = rs.mem_address;
-        bool is_write = (rs.opcode == SW);
-
-		//DO WE NEED TO CHECK CACHE
-    }
-
-}
 
 void Core::do_write_register() {
-	for (int type = 0; type < FU_TYPE_COUNT; type++) {
-		for (auto &fu : fu_pools[type]) {
-			if (!fu.busy) continue;
-			if (fu.cycles_remaining > 0) continue;
+    for (int type = 0; type < FU_TYPE_COUNT; type++) {
+        for (auto &fu : fu_pools[type]) {
+            if (!fu.busy) continue;
+            fu.cycles_remaining--;
+			std::cout << "Cycle " << cycle_count << ": FU type " << type 
+                      << " rs_id=" << fu.rs_id 
+                      << " cycles_left=" << fu.cycles_remaining
+                      << " mem_sent=" << fu.memory_sent << std::endl;
+            if (fu.cycles_remaining > 0) continue;
 
-			int rs_id = fu.rs_id;
-			ReservationStation &rs = rs_all[rs_id];
+            int rs_id = fu.rs_id;
+            ReservationStation &rs = rs_all[rs_id];
 
-			// Write result to destination register
             if (type == FU_LS) {
-                // L/S: after address computation, send to cache
-                //handle_ls_completion(fu, rs_id);
+                // After address computation finishes, simulate memory latency
+                if (!fu.memory_sent) {
+                    if (memory_pending) {
+                        // Can't send yet, keep FU busy, add cycle back
+                        fu.cycles_remaining = 1; // check again next cycle
+                        continue;
+                    }
+                    memory_pending = true;
+                    fu.memory_sent = true;
+                    fu.cycles_remaining = 1; // 1 cycle for cache hit (placeholder)
+                    continue;
+                }
+                // Memory response received — complete the instruction
+                broadcast(rs_id);
+                fu.busy = false;
+                fu.rs_id = -1;
+                fu.memory_sent = false;
+                rs.busy = false;
+                memory_pending = false;
+                // Pop from LS queue
+                if (!ls_queue.empty() && ls_queue.front() == rs_id) {
+                    ls_queue.pop_front();
+                }
                 continue;
             }
-            broadcast(rs_id);
 
-            // Free the FU and RS
+            // Non-LS: broadcast and free
+            broadcast(rs_id);
             fu.busy = false;
             fu.rs_id = -1;
             rs.busy = false;
-            if (rs.opcode == HALT) {
-                terminate = true;
-            }
-		}
-	}
+        }
+    }
 }
 void Core::do_execute() {
     for (int type = 0; type < FU_TYPE_COUNT; type++) {
@@ -424,7 +432,10 @@ void Core::do_read_operands() {
             fu_pools[type][free_fu].rs_id = rs_id;
             fu_pools[type][free_fu].instructions_executed++;
             count_reg_reads(rs_all[rs_id]);
+					std::cout << "Cycle " << cycle_count << ": DISPATCH rs_id=" << rs_id 
+          << " to FU type " << type << std::endl;
         }
+
     }
 }
 void Core::decode_instruction(ReservationStation &rs, uint16_t instruction, uint16_t opcode, int global_rs_id) {
@@ -548,6 +559,8 @@ void Core::do_issue(){
 	}
 	 // Determine source and destination registers from the instruction
 	decode_instruction(rs, instruction, opcode, free_rs);
+	std::cout << "Cycle " << cycle_count << ": ISSUED instr " << next_issue_index 
+          << " " << names[opcode] << " to RS " << free_rs << std::endl;
 	next_issue_index++;
 
 }
@@ -556,9 +569,23 @@ bool Core::tick(Cycle_t cycle)
 	cycle_count++;
 	do_issue();           // try to issue next instruction from trace
     do_read_operands();   // check if waiting instructions can dispatch
-    do_execute();         // decrement counters on executing instructions (dont need to actually execute)
+    //do_execute();         // decrement counters on executing instructions (dont need to actually execute)
 	do_write_register();  // finishing instructions free RS + FU
-    
+     if (next_issue_index >= (int)program.size()) {
+        bool all_done = true;
+        for (auto &rs : rs_all) {
+            if (rs.busy) { all_done = false; break; }
+        }
+        for (int type = 0; type < FU_TYPE_COUNT && all_done; type++) {
+            for (auto &fu : fu_pools[type]) {
+                if (fu.busy) { all_done = false; break; }
+            }
+        }
+        if (all_done && !memory_pending) {
+            primaryComponentOKToEndSim();
+            terminate = true;
+        }
+    }
     return terminate;
 }
 
