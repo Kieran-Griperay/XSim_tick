@@ -9,7 +9,7 @@
 
 // SST interface for memory
 #include <sst/core/interfaces/stdMem.h>
-
+#include <deque>
 // SST statistics
 #include <sst/core/statapi/stataccumulator.h>
 
@@ -20,6 +20,30 @@ namespace XSim
 {
 namespace Core
 {
+
+enum FUType { FU_INTEGER, FU_DIVIDER, FU_MULTIPLIER, FU_LS, FU_TYPE_COUNT };
+
+struct ReservationStation {
+    bool busy = false;
+    int instruction_index = -1;  // index into instruction trace array
+    uint16_t opcode = 0;
+    uint16_t mem_address = 0;  // only used for LW/SW
+    // Source operands: -1 means ready, >= 0 means waiting on that RS tag
+    int src1_ready = -1;
+    int src2_ready = -1;
+    
+    uint16_t dest_reg = 0xFF;      // architectural destination register
+    FUType fu_type; //seperate for each type
+    int age = 0;                // lower is older so higher priority high to low ex. 1,2,3,4
+};
+
+struct FunctionalUnit {
+    bool busy = false;
+    int cycles_remaining = 0;
+	bool memory_sent = false;  // for LS units only
+    int rs_id = -1;           // RS ID using this FU
+    int instructions_executed = 0;
+};
 
 class Core: public SST::Component
 {
@@ -174,6 +198,27 @@ class Core: public SST::Component
 
 		// TimeConverter -> memory needs this
 		TimeConverter* tc{nullptr};
+	private: //TOMSIM
+		std::vector<ReservationStation> rs_all;
+		std::array<int, FU_TYPE_COUNT> rs_type_start;
+		std::array<int, FU_TYPE_COUNT> rs_type_count;
+		std::array<std::vector<FunctionalUnit>, FU_TYPE_COUNT> fu_pools;
+		FUType get_fu_type(uint16_t opcode); // Maps opcode to FU type
+		std::array<int, 8> rename_table; // 8 architectural registers
+		int next_issue_index = 0;
+		int issue_age_counter = 0;
+		uint64_t cycle_count = 0;
+		uint64_t stall_count = 0;
+		std::deque<int> ls_queue;
+		std::array<uint32_t, FU_TYPE_COUNT> fu_latency; //latency of each FU type
+		// In core.hpp
+		bool memory_pending = false;      // is a memory op currently pending?
+		int memory_pending_rs_id = -1;    // which RS is pending?
+		int memory_pending_fu_idx = -1;   // which FU index in fu_pools[FU_LS]?
+		void do_write_register();
+		void do_execute();
+		void do_read_operands();
+		void do_issue();
 };
 
 }

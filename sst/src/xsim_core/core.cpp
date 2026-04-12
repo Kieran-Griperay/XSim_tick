@@ -213,31 +213,335 @@ void Core::load_latencies(Params &params)
     // names.insert({J, "j"});
 }
 
+FUType Core::get_fu_type(uint16_t opcode) {
+    switch (opcode) {
+        case ADD: case SUB: case AND: case NOR:
+        case LIZ: case LIS: case LUI: case PUT: case HALT:
+            return FU_INTEGER;
+        case DIV: case EXP: case MOD:
+            return FU_DIVIDER;
+        case MUL:
+            return FU_MULTIPLIER;
+        case LW: case SW:
+            return FU_LS;
+        default:
+            return FU_INTEGER; // Default to integer for unknown opcodes
+    }
+}
+void Core::init_tomasulo(Params &params) {
+    uint32_t counts[] = {
+        params.find<uint32_t>("integer.resnumber", 4),
+        params.find<uint32_t>("divider.resnumber", 2),
+        params.find<uint32_t>("multiplier.resnumber", 4),
+        params.find<uint32_t>("ls.resnumber", 8)
+    };
+
+    // Build RS array with type ranges
+    int offset = 0;
+    for (int type = 0; type < FU_TYPE_COUNT; type++) {
+        rs_type_start[type] = offset;
+        rs_type_count[type] = counts[type];
+        for (uint32_t i = 0; i < counts[type]; i++) {
+            ReservationStation rs;
+            rs.fu_type = (FUType)type;
+            rs_all.push_back(rs);
+        }
+        offset += counts[type];
+    }
+
+    // FU pools
+    fu_pools[FU_INTEGER].resize(params.find<uint32_t>("integer.number", 2));
+    fu_pools[FU_DIVIDER].resize(params.find<uint32_t>("divider.number", 1));
+    fu_pools[FU_MULTIPLIER].resize(params.find<uint32_t>("multiplier.number", 2));
+    fu_pools[FU_LS].resize(params.find<uint32_t>("ls.number", 1));
+
+    // Latencies
+    fu_latency[FU_INTEGER]    = params.find<uint32_t>("integer.latency", 1);
+    fu_latency[FU_DIVIDER]    = params.find<uint32_t>("divider.latency", 20);
+    fu_latency[FU_MULTIPLIER] = params.find<uint32_t>("multiplier.latency", 10);
+    fu_latency[FU_LS]         = params.find<uint32_t>("ls.latency", 3);
+
+    // Start all registers with ready status -1 (ready)
+    rename_table.fill(-1);
+}
+
+// bool Core::tick(Cycle_t cycle)
+// {
+// 	cycle_count++;
+// 	//std::cout<<"tick"<<std::endl;
+// 	if(!busy)
+// 	{
+// 		fetch_instruction();
+// 		busy = true;
+// 	}
+// 	// Block waiting for memory!
+// 	if(!waiting_memory)
+// 	{
+// 		if(latency_countdown==0)
+// 		{
+// 			execute_instruction();
+// 			if(instruction_count)
+// 			{
+// 				instruction_count->addData(1);
+// 			}
+// 		}
+// 		else
+// 		{
+// 			latency_countdown--;
+// 		}
+// 	}
+// 	return terminate;
+// }
+void Core::broadcast(int rs_id) {
+    ReservationStation &rs = rs_all[rs_id];
+
+    // Wake up any instruction waiting on this RS's result
+    for (auto &other : rs_all) {
+        if (!other.busy) continue;
+        if (other.src1_tag == rs_id) other.src1_tag = -1;
+        if (other.src2_tag == rs_id) other.src2_tag = -1;
+    }
+
+    // Update rename table: only if this RS is still the latest writer
+    if (rs.dest_reg != 0xFF && rename_table[rs.dest_reg] == rs_id) {
+        rename_table[rs.dest_reg] = -1;  // value is now in register file, so it can be marked ready
+    }
+}
+void Core::handle_ls_completion(FunctionalUnit &fu, int rs_id) {
+    ReservationStation &rs = rs_all[rs_id];
+
+    if (!fu.memory_sent) {
+        if (memory_pending) return;  // only one pending at a time
+
+        memory_pending = true;
+        fu.memory_sent = true;
+
+
+        uint16_t addr = rs.mem_address;
+        bool is_write = (rs.opcode == SW);
+
+		//DO WE NEED TO CHECK CACHE
+    }
+
+}
+
+void Core::do_write_register() {
+	for (int type = 0; type < FU_TYPE_COUNT; type++) {
+		for (auto &fu : fu_pools[type]) {
+			if (!fu.busy) continue;
+			if (fu.cycles_remaining > 0) continue;
+
+			int rs_id = fu.rs_id;
+			ReservationStation &rs = rs_all[rs_id];
+
+			// Write result to destination register
+            if (type == FU_LS) {
+                // L/S: after address computation, send to cache
+                //handle_ls_completion(fu, rs_id);
+                continue;
+            }
+            broadcast(rs_id);
+
+            // Free the FU and RS
+            fu.busy = false;
+            fu.rs_id = -1;
+            rs.busy = false;
+            if (rs.opcode == HALT) {
+                terminate = true;
+            }
+		}
+	}
+}
+void Core::do_execute() {
+    for (int type = 0; type < FU_TYPE_COUNT; type++) {
+        for (auto &fu : fu_pools[type]) {
+            if (!fu.busy) continue;
+            fu.cycles_remaining--;
+        }
+    }
+}
+bool Core::is_executing(int rs_id) {
+    FUType type = rs_all[rs_id].fu_type;
+    for (auto &fu : fu_pools[type]) {
+        if (fu.busy && fu.rs_id == rs_id) return true;
+    }
+    return false;
+}
+
+void Core::do_read_operands() {
+    for (int type = 0; type < FU_TYPE_COUNT; type++) {
+        int start = rs_type_start[type];
+        int count = rs_type_count[type];
+
+        if (type == FU_LS) {
+            //ONLY the head can dispatch
+            if (ls_queue.empty()) continue;
+            int head_id = ls_queue.front();
+            ReservationStation &rs = rs_all[head_id];
+            if (!rs.busy) continue;
+            if (rs.src1_tag != -1 || rs.src2_tag != -1) continue;
+            if (is_executing(head_id)) continue;
+
+            int free_fu = -1;
+            for (int f = 0; f < (int)fu_pools[FU_LS].size(); f++) {
+                if (!fu_pools[FU_LS][f].busy) { free_fu = f; break; }
+            }
+            if (free_fu == -1) continue;
+
+            fu_pools[FU_LS][free_fu].busy = true;
+            fu_pools[FU_LS][free_fu].cycles_remaining = fu_latency[FU_LS];
+            fu_pools[FU_LS][free_fu].rs_id = head_id;
+            fu_pools[FU_LS][free_fu].instructions_executed++;
+            count_reg_reads(rs);
+            continue;
+        }
+
+        // Non-LS types: collect ready, sort by age and then dispatch
+        std::vector<int> ready;
+        for (int i = start; i < start + count; i++) {
+            if (!rs_all[i].busy) continue;
+            if (rs_all[i].src1_tag != -1 || rs_all[i].src2_tag != -1) continue;
+            if (is_executing(i)) continue;
+            ready.push_back(i);
+        }
+        if (ready.empty()) continue;
+
+        std::sort(ready.begin(), ready.end(), [this](int a, int b) {
+            return rs_all[a].age < rs_all[b].age;
+        });
+
+        for (int rs_id : ready) {
+            int free_fu = -1;
+            for (int f = 0; f < (int)fu_pools[type].size(); f++) {
+                if (!fu_pools[type][f].busy) { free_fu = f; break; }
+            }
+            if (free_fu == -1) break;
+
+            fu_pools[type][free_fu].busy = true;
+            fu_pools[type][free_fu].cycles_remaining = fu_latency[type];
+            fu_pools[type][free_fu].rs_id = rs_id;
+            fu_pools[type][free_fu].instructions_executed++;
+            count_reg_reads(rs_all[rs_id]);
+        }
+    }
+}
+void Core::decode_instruction(ReservationStation &rs, uint16_t instruction, uint16_t opcode, int global_rs_id) {
+    switch (opcode) {
+        case ADD: case SUB: case AND: case NOR:
+        case DIV: case MUL: case MOD: case EXP:
+        {
+            uint16_t rd   = (instruction >> 8) & 0x07;
+            uint16_t src1 = (instruction >> 5) & 0x07;
+            uint16_t src2 = (instruction >> 2) & 0x07;
+            rs.src1_ready= rename_table[src1];  // -1 if ready
+            rs.src2_ready = rename_table[src2];
+            rs.dest_reg = rd;
+            rename_table[rd] = global_rs_id;
+            break;
+        }
+        case LW:
+        {
+            uint16_t rd   = (instruction >> 8) & 0x07;
+            uint16_t src1 = (instruction >> 5) & 0x07;
+            rs.src1_ready = rename_table[src1];
+            rs.src2_ready = -1;
+            rs.dest_reg = rd;
+            rename_table[rd] = global_rs_id;
+            break;
+        }
+        case SW:
+        {
+            uint16_t src1 = (instruction >> 5) & 0x07;
+            uint16_t src2 = (instruction >> 2) & 0x07;
+            rs.src1_ready = rename_table[src1];
+            rs.src2_ready = rename_table[src2];
+            rs.dest_reg = 0xFF;  // no writeback
+            break;
+        }
+        case LIZ: case LIS:
+        {
+            uint16_t rd = (instruction >> 8) & 0x07;
+            rs.src1_ready = -1;
+            rs.src2_ready = -1;
+            rs.dest_reg = rd;
+            rename_table[rd] = global_rs_id;
+            break;
+        }
+        case LUI:
+        {
+            uint16_t rd = (instruction >> 8) & 0x07;
+            rs.src1_ready = rename_table[rd];  // reads rd for low byte
+            rs.src2_ready = -1;
+            rs.dest_reg = rd;
+            rename_table[rd] = global_rs_id;
+            break;
+        }
+        case PUT:
+        {
+            uint16_t src1 = (instruction >> 5) & 0x07;
+            rs.src1_ready = rename_table[src1];
+            rs.src2_ready = -1;
+            rs.dest_reg = 0xFF;
+            break;
+        }
+        case HALT:
+        {
+            rs.src1_ready = -1;
+            rs.src2_ready = -1;
+            rs.dest_reg = 0xFF;
+            break;
+        }
+    }
+}
+void Core::do_issue(){
+	if (next_issue_index >= (int)program.size()) return; //New PC 
+	uint16_t instruction = program[next_issue_index]; //Instruction line
+	uint16_t opcode = instruction >> 11;
+	std::cout<<"Fetched "<<names[opcode]<<std::endl;
+	FUType type = get_fu_type(opcode);
+	// Find a free reservation station of the right type
+	int free_rs = -1;
+    int start = rs_type_start[type];
+    int count = rs_type_count[type];0
+
+	for(int i = start; i < start + count; i++) {
+		if (!rs_all[i].busy) {
+			free_rs = i;
+			break;
+		}
+	}
+
+	//Check if no free rs, then stall because of hazard
+	if (free_rs == -1) {
+        stall_count++; //STALL 
+        return;
+    }
+	 // Allocate the reservation station
+	ReservationStation &rs = rs_all[free_rs];
+	rs.busy = true;
+	rs.instruction_index = next_issue_index;
+	rs.opcode = opcode;
+	rs.fu_type = type;
+	rs.age = issue_age_counter++;
+	if (type == FU_LS) {
+		uint16_t src_reg = (instruction >> 5) & 0x07;
+		rs.mem_address = registers[src_reg]; // FOR LW/SW This wont work unless register file is maintained
+    	ls_queue.push_back(free_rs);  // add to LS queue for in-order issue
+	}
+	 // Determine source and destination registers from the instruction
+	decode_instruction(rs, instruction, opcode, free_rs);
+	next_issue_index++;
+
+}
 bool Core::tick(Cycle_t cycle)
 {
-	//std::cout<<"tick"<<std::endl;
-	if(!busy)
-	{
-		fetch_instruction();
-		busy = true;
-	}
-	// Block waiting for memory!
-	if(!waiting_memory)
-	{
-		if(latency_countdown==0)
-		{
-			execute_instruction();
-			if(instruction_count)
-			{
-				instruction_count->addData(1);
-			}
-		}
-		else
-		{
-			latency_countdown--;
-		}
-	}
-	return terminate;
+	cycle_count++;
+	do_write_register();  // finishing instructions free RS + FU
+    do_execute();         // decrement counters on executing instructions (dont need to actually execute)
+    do_read_operands();   // check if waiting instructions can dispatch
+    do_issue();           // try to issue next instruction from trace
+    
+    return terminate;
 }
 
 void Core::fetch_instruction()
