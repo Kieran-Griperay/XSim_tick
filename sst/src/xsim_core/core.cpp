@@ -38,7 +38,7 @@ Core::Core(ComponentId_t id, Params& params):
 
 	// load the program that is to be executed
 	load_program(params);
-
+	init_tomasulo(params);
 	// Create the SST output with the required verbosity level
 	output = new Output("mips_core[@t:@l]: ", verbose, 0, Output::STDOUT);
 
@@ -84,14 +84,14 @@ void Core::finish()
 
     root["reg reads"] = reg_reads;
     
-    for (auto const& [op, name] : names) {
-        stats[name] = (Json::UInt64)instruction_counts[op]; 
-    }
+    // for (auto const& [op, name] : names) {
+    //     stats[name] = (Json::UInt64)instruction_counts[op]; 
+    // }
     
-    stats["instructions"] = (Json::UInt64)total_instructions;
-    stats["cycles"] = (Json::UInt64)total_cycles;
+    // stats["instructions"] = (Json::UInt64)total_instructions;
+    // stats["cycles"] = (Json::UInt64)total_cycles;
     
-    root["stats"] = stats;
+    //root["stats"] = stats;
 	std::string output_file_path = "statistics.json";
     std::ofstream out_file(output_file_path);
     if (out_file.is_open()) {
@@ -298,8 +298,8 @@ void Core::broadcast(int rs_id) {
     // Wake up any instruction waiting on this RS's result
     for (auto &other : rs_all) {
         if (!other.busy) continue;
-        if (other.src1_tag == rs_id) other.src1_tag = -1;
-        if (other.src2_tag == rs_id) other.src2_tag = -1;
+        if (other.src1_ready == rs_id) other.src1_ready = -1;
+        if (other.src2_ready == rs_id) other.src2_ready = -1;
     }
 
     // Update rename table: only if this RS is still the latest writer
@@ -315,7 +315,6 @@ void Core::handle_ls_completion(FunctionalUnit &fu, int rs_id) {
 
         memory_pending = true;
         fu.memory_sent = true;
-
 
         uint16_t addr = rs.mem_address;
         bool is_write = (rs.opcode == SW);
@@ -367,7 +366,10 @@ bool Core::is_executing(int rs_id) {
     }
     return false;
 }
-
+void Core::count_reg_reads(ReservationStation &rs) {
+    if (rs.src1_from_rf) reg_reads++;
+    if (rs.src2_from_rf) reg_reads++;
+}
 void Core::do_read_operands() {
     for (int type = 0; type < FU_TYPE_COUNT; type++) {
         int start = rs_type_start[type];
@@ -379,7 +381,7 @@ void Core::do_read_operands() {
             int head_id = ls_queue.front();
             ReservationStation &rs = rs_all[head_id];
             if (!rs.busy) continue;
-            if (rs.src1_tag != -1 || rs.src2_tag != -1) continue;
+            if (rs.src1_ready != -1 || rs.src2_ready != -1) continue;
             if (is_executing(head_id)) continue;
 
             int free_fu = -1;
@@ -400,7 +402,7 @@ void Core::do_read_operands() {
         std::vector<int> ready;
         for (int i = start; i < start + count; i++) {
             if (!rs_all[i].busy) continue;
-            if (rs_all[i].src1_tag != -1 || rs_all[i].src2_tag != -1) continue;
+            if (rs_all[i].src1_ready != -1 || rs_all[i].src2_ready != -1) continue;
             if (is_executing(i)) continue;
             ready.push_back(i);
         }
@@ -492,6 +494,22 @@ void Core::decode_instruction(ReservationStation &rs, uint16_t instruction, uint
             break;
         }
     }
+	switch (opcode) {
+        case ADD: case SUB: case AND: case NOR:
+        case DIV: case MUL: case MOD: case EXP:
+        case SW:
+            rs.src1_from_rf = (rs.src1_ready == -1);
+            rs.src2_from_rf = (rs.src2_ready == -1);
+            break;
+        case LW: case LUI: case PUT:
+            rs.src1_from_rf = (rs.src1_ready == -1);
+            rs.src2_from_rf = false;
+            break;
+        case LIZ: case LIS: case HALT:
+            rs.src1_from_rf = false;
+            rs.src2_from_rf = false;
+            break;
+    }
 }
 void Core::do_issue(){
 	if (next_issue_index >= (int)program.size()) return; //New PC 
@@ -502,7 +520,7 @@ void Core::do_issue(){
 	// Find a free reservation station of the right type
 	int free_rs = -1;
     int start = rs_type_start[type];
-    int count = rs_type_count[type];0
+    int count = rs_type_count[type];
 
 	for(int i = start; i < start + count; i++) {
 		if (!rs_all[i].busy) {
@@ -536,10 +554,10 @@ void Core::do_issue(){
 bool Core::tick(Cycle_t cycle)
 {
 	cycle_count++;
-	do_write_register();  // finishing instructions free RS + FU
-    do_execute();         // decrement counters on executing instructions (dont need to actually execute)
+	do_issue();           // try to issue next instruction from trace
     do_read_operands();   // check if waiting instructions can dispatch
-    do_issue();           // try to issue next instruction from trace
+    do_execute();         // decrement counters on executing instructions (dont need to actually execute)
+	do_write_register();  // finishing instructions free RS + FU
     
     return terminate;
 }
@@ -561,280 +579,278 @@ void Core::fetch_instruction()
 	}
 }
 // Return in order:  rd, rs, rt format
-std::array<uint16_t, 3> populateRInstructionRegisters(uint16_t instruction){
-    //std::cout << instruction << std::endl;
-    std::array<uint16_t, 3> r_registers;
+// std::array<uint16_t, 3> populateRInstructionRegisters(uint16_t instruction){
+//     //std::cout << instruction << std::endl;
+//     std::array<uint16_t, 3> r_registers;
     
-    r_registers[0] = (uint16_t)((instruction >> 8) & 0x07); // rd 
-    r_registers[1] = (uint16_t)((instruction >> 5) & 0x07); // rs 
-    r_registers[2] = (uint16_t)((instruction >> 2) & 0x07); // rt
+//     r_registers[0] = (uint16_t)((instruction >> 8) & 0x07); // rd 
+//     r_registers[1] = (uint16_t)((instruction >> 5) & 0x07); // rs 
+//     r_registers[2] = (uint16_t)((instruction >> 2) & 0x07); // rt
     
     
-    return r_registers;
-}
-void incrementRegisterReads(int count){
-	reg_reads += count;
-}
-void Core::execute_instruction()
-{
-	// Better be aligned!!
-	uint16_t instruction = program[pc/2];
-	uint16_t opcode = instruction >> 11;
-	instruction_counts[opcode]++;
-    total_instructions++;
-    total_cycles += latencies[opcode];
-	uint16_t rd,rs,rt,imm8;
+//     return r_registers;
+// }
 
-	std::cout<<"Running "<<names[opcode]<<std::endl;
-	switch (opcode)
-	{
-		case ADD:
-		{
-			std::array<uint16_t, 3> r_registers = populateRInstructionRegisters(instruction);
-			uint16_t rd = r_registers[0]; 
-			uint16_t rs = r_registers[1]; 
-			uint16_t rt = r_registers[2]; 
+// void Core::execute_instruction()
+// {
+// 	// Better be aligned!!
+// 	uint16_t instruction = program[pc/2];
+// 	uint16_t opcode = instruction >> 11;
+// 	instruction_counts[opcode]++;
+//     total_instructions++;
+//     total_cycles += latencies[opcode];
+// 	uint16_t rd,rs,rt,imm8;
 
-			registers[rd] = registers[rs] + registers[rt];
-			incrementRegisterReads(2);
+// 	std::cout<<"Running "<<names[opcode]<<std::endl;
+// 	switch (opcode)
+// 	{
+// 		case ADD:
+// 		{
+// 			std::array<uint16_t, 3> r_registers = populateRInstructionRegisters(instruction);
+// 			uint16_t rd = r_registers[0]; 
+// 			uint16_t rs = r_registers[1]; 
+// 			uint16_t rt = r_registers[2]; 
 
-			pc += 2;
-			busy = false; 		
-			break;
-		}
-		case SUB:
-		{
-			std::array<uint16_t, 3> r_registers = populateRInstructionRegisters(instruction);
-			uint16_t rd = r_registers[0]; 
-			uint16_t rs = r_registers[1]; 
-			uint16_t rt = r_registers[2]; 
+// 			registers[rd] = registers[rs] + registers[rt];
+// 			incrementRegisterReads(2);
 
-			registers[rd] = registers[rs] - registers[rt];
-			incrementRegisterReads(2);
+// 			pc += 2;
+// 			busy = false; 		
+// 			break;
+// 		}
+// 		case SUB:
+// 		{
+// 			std::array<uint16_t, 3> r_registers = populateRInstructionRegisters(instruction);
+// 			uint16_t rd = r_registers[0]; 
+// 			uint16_t rs = r_registers[1]; 
+// 			uint16_t rt = r_registers[2]; 
 
-			pc += 2;
-			busy = false; 
-			break;
-		}
-		case AND:
-		{
-			std::array<uint16_t, 3> r_registers = populateRInstructionRegisters(instruction);
-			uint16_t rd = r_registers[0]; 
-			uint16_t rs = r_registers[1]; 
-			uint16_t rt = r_registers[2]; 
+// 			registers[rd] = registers[rs] - registers[rt];
+// 			incrementRegisterReads(2);
 
-			registers[rd] = registers[rs] & registers[rt];
-			incrementRegisterReads(2);
-			pc += 2;
-			busy = false; 
+// 			pc += 2;
+// 			busy = false; 
+// 			break;
+// 		}
+// 		case AND:
+// 		{
+// 			std::array<uint16_t, 3> r_registers = populateRInstructionRegisters(instruction);
+// 			uint16_t rd = r_registers[0]; 
+// 			uint16_t rs = r_registers[1]; 
+// 			uint16_t rt = r_registers[2]; 
+
+// 			registers[rd] = registers[rs] & registers[rt];
+// 			incrementRegisterReads(2);
+// 			pc += 2;
+// 			busy = false; 
 			
-			break;
-		}
-		case NOR:
-		{
-			std::array<uint16_t, 3> r_registers = populateRInstructionRegisters(instruction);
-			uint16_t rd = r_registers[0]; 
-			uint16_t rs = r_registers[1]; 
-			uint16_t rt = r_registers[2]; 
+// 			break;
+// 		}
+// 		case NOR:
+// 		{
+// 			std::array<uint16_t, 3> r_registers = populateRInstructionRegisters(instruction);
+// 			uint16_t rd = r_registers[0]; 
+// 			uint16_t rs = r_registers[1]; 
+// 			uint16_t rt = r_registers[2]; 
 
-			registers[rd] = !(registers[rs] | registers[rt]);
-			incrementRegisterReads(2);
+// 			registers[rd] = !(registers[rs] | registers[rt]);
+// 			incrementRegisterReads(2);
 			
-			pc += 2;
-			busy = false; 
+// 			pc += 2;
+// 			busy = false; 
 			
-			break;
-		}
-		case DIV:
-		{
-			std::array<uint16_t, 3> r_registers = populateRInstructionRegisters(instruction);
-			uint16_t rd = r_registers[0]; 
-			uint16_t rs = r_registers[1]; 
-			uint16_t rt = r_registers[2]; 
+// 			break;
+// 		}
+// 		case DIV:
+// 		{
+// 			std::array<uint16_t, 3> r_registers = populateRInstructionRegisters(instruction);
+// 			uint16_t rd = r_registers[0]; 
+// 			uint16_t rs = r_registers[1]; 
+// 			uint16_t rt = r_registers[2]; 
 
-			registers[rd] = registers[rs] / registers[rt];
-			incrementRegisterReads(2);
+// 			registers[rd] = registers[rs] / registers[rt];
+// 			incrementRegisterReads(2);
 
 
-			pc += 2;
-			busy = false; 
+// 			pc += 2;
+// 			busy = false; 
 			
-			break;
-		}
-		case MUL:
-		{
-			std::array<uint16_t, 3> r_registers = populateRInstructionRegisters(instruction);
-			uint16_t rd = r_registers[0]; 
-			uint16_t rs = r_registers[1]; 
-			uint16_t rt = r_registers[2]; 
+// 			break;
+// 		}
+// 		case MUL:
+// 		{
+// 			std::array<uint16_t, 3> r_registers = populateRInstructionRegisters(instruction);
+// 			uint16_t rd = r_registers[0]; 
+// 			uint16_t rs = r_registers[1]; 
+// 			uint16_t rt = r_registers[2]; 
 
-			registers[rd] = (uint16_t) ((registers[rs] * registers[rt]) & 0xFF);
-			incrementRegisterReads(2);
+// 			registers[rd] = (uint16_t) ((registers[rs] * registers[rt]) & 0xFF);
+// 			incrementRegisterReads(2);
 
 
-			pc += 2;
-			busy = false; 
+// 			pc += 2;
+// 			busy = false; 
 			
-			break;
-		}
-		case MOD:
-		{
-			std::array<uint16_t, 3> r_registers = populateRInstructionRegisters(instruction);
-			uint16_t rd = r_registers[0]; 
-			uint16_t rs = r_registers[1]; 
-			uint16_t rt = r_registers[2]; 
+// 			break;
+// 		}
+// 		case MOD:
+// 		{
+// 			std::array<uint16_t, 3> r_registers = populateRInstructionRegisters(instruction);
+// 			uint16_t rd = r_registers[0]; 
+// 			uint16_t rs = r_registers[1]; 
+// 			uint16_t rt = r_registers[2]; 
 
-			registers[rd] = registers[rs] % registers[rt];
-			incrementRegisterReads(2);
+// 			registers[rd] = registers[rs] % registers[rt];
+// 			incrementRegisterReads(2);
 
-			pc += 2;
-			busy = false; 
+// 			pc += 2;
+// 			busy = false; 
 			
-			break;
-		}
-		case EXP:
-		{
-			std::array<uint16_t, 3> r_registers = populateRInstructionRegisters(instruction);
-			uint16_t rd = r_registers[0]; 
-			uint16_t rs = r_registers[1]; 
-			uint16_t rt = r_registers[2]; 
+// 			break;
+// 		}
+// 		case EXP:
+// 		{
+// 			std::array<uint16_t, 3> r_registers = populateRInstructionRegisters(instruction);
+// 			uint16_t rd = r_registers[0]; 
+// 			uint16_t rs = r_registers[1]; 
+// 			uint16_t rt = r_registers[2]; 
 
-			registers[rd] = (uint16_t)std::pow(registers[rs], registers[rt]);
-			incrementRegisterReads(2);
+// 			registers[rd] = (uint16_t)std::pow(registers[rs], registers[rt]);
+// 			incrementRegisterReads(2);
 
-			pc += 2;
-			busy = false; 
+// 			pc += 2;
+// 			busy = false; 
 			
-			break;
-		}
+// 			break;
+// 		}
 		
-		case LW:
-			rs = (instruction >> 5) & 0x07;
-			rd = (instruction >> 8) & 0x07;
-			waiting_memory = true;
-			memory_wrapper->read(registers[rs], [this, rd](uint16_t addr, uint16_t data)
-			{
-				registers[rd]=data;
-				pc+=2;
-				busy = false;
-				waiting_memory = false;
-			});
-			incrementRegisterReads(1);
+// 		case LW:
+// 			rs = (instruction >> 5) & 0x07;
+// 			rd = (instruction >> 8) & 0x07;
+// 			waiting_memory = true;
+// 			memory_wrapper->read(registers[rs], [this, rd](uint16_t addr, uint16_t data)
+// 			{
+// 				registers[rd]=data;
+// 				pc+=2;
+// 				busy = false;
+// 				waiting_memory = false;
+// 			});
+// 			incrementRegisterReads(1);
 
-			break;
-		case SW:
-			rs = (instruction >> 5) & 0x07;
-			rt = (instruction >> 2) & 0x07;
-			waiting_memory = true;
-			memory_wrapper->write(registers[rs], registers[rt], [this](uint16_t addr)
-			{
-				pc+=2;
-				busy = false;
-				waiting_memory = false;
-			});
-			incrementRegisterReads(1);
-			break;
-		case LIZ:
-			rd = (instruction >> 8) & 0x07;
-			imm8 = instruction & 0xFF;
-			registers[rd]=imm8;
-			pc+=2;
-			busy = false;
-			break;
-		case LIS: 
-            rd = (instruction >> 8) & 0x07;
-            imm8 = instruction & 0xFF;
-            registers[rd] = (uint16_t)((int16_t)((int8_t)imm8)); 
-            pc += 2;
-            busy = false;
-            break;
-        case LUI: 
-            rd = (instruction >> 8) & 0x07;
-            imm8 = instruction & 0xFF;
-            registers[rd] = (imm8 << 8) | (registers[rd] & 0xFF);
-			incrementRegisterReads(1);
-            pc += 2;
-            busy = false;
-            break;
-		case BP: 
-            rd = (instruction >> 8) & 0x07;
-            rs = (instruction >> 5) & 0x07;
-            imm8 = instruction & 0xFF;
-            if ((int16_t)registers[rs] > 0) pc = (imm8 << 1); else pc += 2;
-			incrementRegisterReads(1);
+// 			break;
+// 		case SW:
+// 			rs = (instruction >> 5) & 0x07;
+// 			rt = (instruction >> 2) & 0x07;
+// 			waiting_memory = true;
+// 			memory_wrapper->write(registers[rs], registers[rt], [this](uint16_t addr)
+// 			{
+// 				pc+=2;
+// 				busy = false;
+// 				waiting_memory = false;
+// 			});
+// 			incrementRegisterReads(1);
+// 			break;
+// 		case LIZ:
+// 			rd = (instruction >> 8) & 0x07;
+// 			imm8 = instruction & 0xFF;
+// 			registers[rd]=imm8;
+// 			pc+=2;
+// 			busy = false;
+// 			break;
+// 		case LIS: 
+//             rd = (instruction >> 8) & 0x07;
+//             imm8 = instruction & 0xFF;
+//             registers[rd] = (uint16_t)((int16_t)((int8_t)imm8)); 
+//             pc += 2;
+//             busy = false;
+//             break;
+//         case LUI: 
+//             rd = (instruction >> 8) & 0x07;
+//             imm8 = instruction & 0xFF;
+//             registers[rd] = (imm8 << 8) | (registers[rd] & 0xFF);
+// 			incrementRegisterReads(1);
+//             pc += 2;
+//             busy = false;
+//             break;
+// 		case BP: 
+//             rd = (instruction >> 8) & 0x07;
+//             rs = (instruction >> 5) & 0x07;
+//             imm8 = instruction & 0xFF;
+//             if ((int16_t)registers[rs] > 0) pc = (imm8 << 1); else pc += 2;
+// 			incrementRegisterReads(1);
 
-            busy = false;
-            break;
-        case BN: 
-            rd = (instruction >> 8) & 0x07;
-            rs = (instruction >> 5) & 0x07;
-            imm8 = instruction & 0xFF;
-            if ((int16_t)registers[rs] < 0) pc = (imm8 << 1); else pc += 2;
-			incrementRegisterReads(1);
+//             busy = false;
+//             break;
+//         case BN: 
+//             rd = (instruction >> 8) & 0x07;
+//             rs = (instruction >> 5) & 0x07;
+//             imm8 = instruction & 0xFF;
+//             if ((int16_t)registers[rs] < 0) pc = (imm8 << 1); else pc += 2;
+// 			incrementRegisterReads(1);
 
-            busy = false;
-            break;
-        case BX: 
-            rd = (instruction >> 8) & 0x07;
-            rs = (instruction >> 5) & 0x07;
-            imm8 = instruction & 0xFF;
-            if (registers[rs] != 0) pc = (imm8 << 1); else pc += 2;
-			incrementRegisterReads(1);
+//             busy = false;
+//             break;
+//         case BX: 
+//             rd = (instruction >> 8) & 0x07;
+//             rs = (instruction >> 5) & 0x07;
+//             imm8 = instruction & 0xFF;
+//             if (registers[rs] != 0) pc = (imm8 << 1); else pc += 2;
+// 			incrementRegisterReads(1);
 
-            busy = false;
-            break;
-        case BZ: 
-            rd = (instruction >> 8) & 0x07;
-            rs = (instruction >> 5) & 0x07;
-            imm8 = instruction & 0xFF;
-            if (registers[rs] == 0) pc = (imm8 << 1); else pc += 2;
-			incrementRegisterReads(1);
+//             busy = false;
+//             break;
+//         case BZ: 
+//             rd = (instruction >> 8) & 0x07;
+//             rs = (instruction >> 5) & 0x07;
+//             imm8 = instruction & 0xFF;
+//             if (registers[rs] == 0) pc = (imm8 << 1); else pc += 2;
+// 			incrementRegisterReads(1);
 
-            busy = false;
-            break;
-		case JR: 
-            rs = (instruction >> 5) & 0x07;
-            pc = registers[rs] & 0xFFFE;
-			incrementRegisterReads(1);
+//             busy = false;
+//             break;
+// 		case JR: 
+//             rs = (instruction >> 5) & 0x07;
+//             pc = registers[rs] & 0xFFFE;
+// 			incrementRegisterReads(1);
 
-            busy = false;
-            break;
-        case JALR: 
-            rd = (instruction >> 8) & 0x07;
-            rs = (instruction >> 5) & 0x07;
-            registers[rd] = pc + 2;
-            pc = registers[rs] & 0xFFFE;
-			incrementRegisterReads(1);
+//             busy = false;
+//             break;
+//         case JALR: 
+//             rd = (instruction >> 8) & 0x07;
+//             rs = (instruction >> 5) & 0x07;
+//             registers[rd] = pc + 2;
+//             pc = registers[rs] & 0xFFFE;
+// 			incrementRegisterReads(1);
 
-            busy = false;
-            break;
-        case J: 
-        {
-            uint16_t imm11 = instruction & 0x07FF; 
-            pc = (pc & 0xF000) | (imm11 << 1); 
-            busy = false;
-            break;
-        }
-		case PUT:
-			rs = (instruction >> 5) & 0x07;
-			std::cout<<"Register "<<(int)rs<<" = "<<registers[rs]<<"(unsigned) = "<<(int16_t)registers[rs]<<"(signed)"<<std::endl;
-			incrementRegisterReads(1);
+//             busy = false;
+//             break;
+//         case J: 
+//         {
+//             uint16_t imm11 = instruction & 0x07FF; 
+//             pc = (pc & 0xF000) | (imm11 << 1); 
+//             busy = false;
+//             break;
+//         }
+// 		case PUT:
+// 			rs = (instruction >> 5) & 0x07;
+// 			std::cout<<"Register "<<(int)rs<<" = "<<registers[rs]<<"(unsigned) = "<<(int16_t)registers[rs]<<"(signed)"<<std::endl;
+// 			incrementRegisterReads(1);
 			
-			pc+=2;
-			busy = false;
-			break;
-		case HALT:
-			pc+=2;
-			primaryComponentOKToEndSim();
-			// unregisterExit();
-			busy = false;
-			break;
-	}
-	if(opcode == HALT)
-	{
-		terminate = true;
-	}
-}
+// 			pc+=2;
+// 			busy = false;
+// 			break;
+// 		case HALT:
+// 			pc+=2;
+// 			primaryComponentOKToEndSim();
+// 			// unregisterExit();
+// 			busy = false;
+// 			break;
+// 	}
+// 	if(opcode == HALT)
+// 	{
+// 		terminate = true;
+// 	}
+// }
 
 
 }

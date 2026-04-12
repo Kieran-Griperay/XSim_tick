@@ -25,16 +25,16 @@ enum FUType { FU_INTEGER, FU_DIVIDER, FU_MULTIPLIER, FU_LS, FU_TYPE_COUNT };
 
 struct ReservationStation {
     bool busy = false;
-    int instruction_index = -1;  // index into instruction trace array
+    int instruction_index = -1;
     uint16_t opcode = 0;
-    uint16_t mem_address = 0;  // only used for LW/SW
-    // Source operands: -1 means ready, >= 0 means waiting on that RS tag
+    uint16_t mem_address = 0;
     int src1_ready = -1;
     int src2_ready = -1;
-    
-    uint16_t dest_reg = 0xFF;      // architectural destination register
-    FUType fu_type; //seperate for each type
-    int age = 0;                // lower is older so higher priority high to low ex. 1,2,3,4
+    bool src1_from_rf = false;  // was src1 read from register file?
+    bool src2_from_rf = false;  // was src2 read from register file?
+    uint16_t dest_reg = 0xFF;
+    FUType fu_type;
+    int age = 0;
 };
 
 struct FunctionalUnit {
@@ -133,6 +133,7 @@ class Core: public SST::Component
 		/** These functions are defined by SST **/
 		Core(ComponentId_t id, Params& params);
 		virtual void init(unsigned int phase) override final;
+
 		virtual void setup() override final;
 		virtual void finish() override final;
 		bool tick(Cycle_t cycle);
@@ -199,6 +200,14 @@ class Core: public SST::Component
 		// TimeConverter -> memory needs this
 		TimeConverter* tc{nullptr};
 	private: //TOMSIM
+		void init_tomasulo(Params &params);
+		void broadcast(int rs_id);
+		void handle_ls_completion(FunctionalUnit &fu, int rs_id);
+		bool is_executing(int rs_id);
+		void count_reg_reads(ReservationStation &rs);
+		void decode_instruction(ReservationStation &rs, uint16_t instruction, uint16_t opcode, int global_rs_id);
+		void shadow_execute(uint16_t instruction, uint16_t opcode);
+		void memory_complete_callback(int rs_id);
 		std::vector<ReservationStation> rs_all;
 		std::array<int, FU_TYPE_COUNT> rs_type_start;
 		std::array<int, FU_TYPE_COUNT> rs_type_count;
