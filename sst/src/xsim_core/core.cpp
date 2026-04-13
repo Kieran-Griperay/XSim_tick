@@ -77,14 +77,44 @@ void Core::finish()
 {
 	Json::Value root;
 
-	Json::Value integer;
-	Json::Value multiplier;
-	Json::Value divider;
-	Json::Value ls;
+	root["cycles"] = cycle_count;
+
+    // Make sure instruction_counts values in correct order
+    int count = 0;
+    // Integer
+    for(count < 9; count++) {
+        Json::Value int0;
+        int0["id"] = count;
+        int0["instructions"] = instruction_counts[count];
+        root["integer"].append(int0);
+    }
+
+    // Divider
+    for(i < 3; count++) {
+        Json::Value int0;
+        int0["id"] = count;
+        int0["instructions"] = instruction_counts[count];
+        root["divider"].append(int0);
+    }
+
+    // Multiplier
+    for(count < 1; count++) {
+        Json::Value int0;
+        int0["id"] = count;
+        int0["instructions"] = instruction_counts[count];
+        root["multiplier"].append(int0);
+    }
+
+    // LS
+    for(count < 9; count++) {
+        Json::Value int0;
+        int0["id"] = count;
+        int0["instructions"] = instruction_counts[count];
+        root["ls"].append(int0);
+    }
 
     root["reg reads"] = reg_reads;
 	root["stalls"] = stall_count;
-	root["cycles"] = cycle_count;
     
     // for (auto const& [op, name] : names) {
     //     stats[name] = (Json::UInt64)instruction_counts[op]; 
@@ -623,7 +653,7 @@ void Core::fetch_instruction()
 // 	// Better be aligned!!
 // 	uint16_t instruction = program[pc/2];
 // 	uint16_t opcode = instruction >> 11;
-// 	instruction_counts[opcode]++;
+// 	[opcode]++;
 //     total_instructions++;
 //     total_cycles += latencies[opcode];
 // 	uint16_t rd,rs,rt,imm8;
