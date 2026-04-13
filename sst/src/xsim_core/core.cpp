@@ -80,37 +80,36 @@ void Core::finish()
 	root["cycles"] = cycle_count;
 
     // Make sure instruction_counts values in correct order
-    int count = 0;
     // Integer
-    for(count < 9; count++) {
-        Json::Value int0;
-        int0["id"] = count;
-        int0["instructions"] = instruction_counts[count];
-        root["integer"].append(int0);
+    for (int i = 0; i < fu_pools[FU_INTEGER].size(); i++) {
+        Json::Value obj;
+        obj["id"] = i;
+        obj["instructions"] = fu_pools[FU_INTEGER][i].instructions_executed;
+        root["integer"].append(obj);
     }
 
     // Divider
-    for(i < 3; count++) {
-        Json::Value int0;
-        int0["id"] = count;
-        int0["instructions"] = instruction_counts[count];
-        root["divider"].append(int0);
+    for (int i = 0; i < fu_pools[FU_DIVIDER].size(); i++) {
+        Json::Value obj;
+        obj["id"] = i;
+        obj["instructions"] = fu_pools[FU_DIVIDER][i].instructions_executed;
+        root["divider"].append(obj);
     }
 
     // Multiplier
-    for(count < 1; count++) {
-        Json::Value int0;
-        int0["id"] = count;
-        int0["instructions"] = instruction_counts[count];
-        root["multiplier"].append(int0);
+    for (int i = 0; i < fu_pools[FU_MULTIPLIER].size(); i++) {
+        Json::Value obj;
+        obj["id"] = i;
+        obj["instructions"] = fu_pools[FU_MULTIPLIER][i].instructions_executed;
+        root["multiplier"].append(obj);
     }
 
     // LS
-    for(count < 9; count++) {
-        Json::Value int0;
-        int0["id"] = count;
-        int0["instructions"] = instruction_counts[count];
-        root["ls"].append(int0);
+    for (int i = 0; i < fu_pools[FU_LS].size(); i++) {
+        Json::Value obj;
+        obj["id"] = i;
+        obj["instructions"] = fu_pools[FU_LS][i].instructions_executed;
+        root["ls"].append(obj);
     }
 
     root["reg reads"] = reg_reads;
@@ -344,7 +343,7 @@ void Core::do_write_register() {
     for (int type = 0; type < FU_TYPE_COUNT; type++) {
         for (auto &fu : fu_pools[type]) {
             if (!fu.busy) continue;
-            fu.cycles_remaining--;
+            //fu.cycles_remaining--;
 			std::cout << "Cycle " << cycle_count << ": FU type " << type 
                       << " rs_id=" << fu.rs_id 
                       << " cycles_left=" << fu.cycles_remaining
@@ -359,21 +358,24 @@ void Core::do_write_register() {
                 if (!fu.memory_sent) {
                     if (memory_pending) {
                         // Can't send yet, keep FU busy, add cycle back
-                        fu.cycles_remaining = 1; // check again next cycle
+                        fu.cycles_remaining = 0; // check again next cycle
                         continue;
                     }
                     memory_pending = true;
                     fu.memory_sent = true;
-                    fu.cycles_remaining = 1; // 1 cycle for cache hit (placeholder)
+                    fu.cycles_remaining = 0; // 1 cycle for cache hit (placeholder)
+                    fu.started = false;
                     continue;
                 }
                 // Memory response received — complete the instruction
                 broadcast(rs_id);
+                fu.instructions_executed++;
                 fu.busy = false;
                 fu.rs_id = -1;
                 fu.memory_sent = false;
                 rs.busy = false;
                 memory_pending = false;
+                fu.started = false;
                 // Pop from LS queue
                 if (!ls_queue.empty() && ls_queue.front() == rs_id) {
                     ls_queue.pop_front();
@@ -383,9 +385,11 @@ void Core::do_write_register() {
 
             // Non-LS: broadcast and free
             broadcast(rs_id);
+            fu.instructions_executed++;
             fu.busy = false;
             fu.rs_id = -1;
             rs.busy = false;
+            fu.started = false;
         }
     }
 }
@@ -393,6 +397,10 @@ void Core::do_execute() {
     for (int type = 0; type < FU_TYPE_COUNT; type++) {
         for (auto &fu : fu_pools[type]) {
             if (!fu.busy) continue;
+            if (!fu.started){ // cannot execute in the same cycle as dispatch
+                fu.started = true;
+                continue;
+            }
             fu.cycles_remaining--;
         }
     }
@@ -429,10 +437,11 @@ void Core::do_read_operands() {
             if (free_fu == -1) continue;
 
             fu_pools[FU_LS][free_fu].busy = true;
-            fu_pools[FU_LS][free_fu].cycles_remaining = fu_latency[FU_LS];
+            fu_pools[FU_LS][free_fu].started = false;
+            fu_pools[FU_LS][free_fu].cycles_remaining = fu_latency[FU_LS] - 1;
             fu_pools[FU_LS][free_fu].rs_id = head_id;
             fu_pools[FU_LS][free_fu].instructions_executed++;
-            count_reg_reads(rs);
+            //count_reg_reads(rs);
             continue;
         }
 
@@ -458,10 +467,11 @@ void Core::do_read_operands() {
             if (free_fu == -1) break;
 
             fu_pools[type][free_fu].busy = true;
-            fu_pools[type][free_fu].cycles_remaining = fu_latency[type];
+            fu_pools[type][free_fu].started = false;
+            fu_pools[type][free_fu].cycles_remaining = fu_latency[type] - 1;
             fu_pools[type][free_fu].rs_id = rs_id;
-            fu_pools[type][free_fu].instructions_executed++;
-            count_reg_reads(rs_all[rs_id]);
+            //fu_pools[type][free_fu].instructions_executed++;
+            //count_reg_reads(rs_all[rs_id]);
 					std::cout << "Cycle " << cycle_count << ": DISPATCH rs_id=" << rs_id 
           << " to FU type " << type << std::endl;
         }
@@ -535,15 +545,17 @@ void Core::decode_instruction(ReservationStation &rs, uint16_t instruction, uint
             break;
         }
     }
+
+    // Every archtictural reg read counts as reg read
 	switch (opcode) {
         case ADD: case SUB: case AND: case NOR:
         case DIV: case MUL: case MOD: case EXP:
         case SW:
-            rs.src1_from_rf = (rs.src1_ready == -1);
-            rs.src2_from_rf = (rs.src2_ready == -1);
+            rs.src1_from_rf = true;
+            rs.src2_from_rf = true;
             break;
         case LW: case LUI: case PUT:
-            rs.src1_from_rf = (rs.src1_ready == -1);
+            rs.src1_from_rf = true;
             rs.src2_from_rf = false;
             break;
         case LIZ: case LIS: case HALT:
@@ -589,6 +601,7 @@ void Core::do_issue(){
 	}
 	 // Determine source and destination registers from the instruction
 	decode_instruction(rs, instruction, opcode, free_rs);
+    count_reg_reads(rs);
 	std::cout << "Cycle " << cycle_count << ": ISSUED instr " << next_issue_index 
           << " " << names[opcode] << " to RS " << free_rs << std::endl;
 	next_issue_index++;
@@ -599,7 +612,7 @@ bool Core::tick(Cycle_t cycle)
 	cycle_count++;
 	do_issue();           // try to issue next instruction from trace
     do_read_operands();   // check if waiting instructions can dispatch
-    //do_execute();         // decrement counters on executing instructions (dont need to actually execute)
+    do_execute();         // decrement counters on executing instructions (dont need to actually execute)
 	do_write_register();  // finishing instructions free RS + FU
      if (next_issue_index >= (int)program.size()) {
         bool all_done = true;

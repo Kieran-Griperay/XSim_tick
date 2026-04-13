@@ -41,6 +41,7 @@ struct FunctionalUnit {
     bool busy = false;
     int cycles_remaining = 0;
 	bool memory_sent = false;  // for LS units only
+	bool started = false;
     int rs_id = -1;           // RS ID using this FU
     int instructions_executed = 0;
 };
