@@ -33,8 +33,14 @@ Core::Core(ComponentId_t id, Params& params):
 	clock_frequency=params.find<std::string>("clock",clock_frequency);
 	this->registerTimeBase(clock_frequency, true );
 
+
+	output_file_path = params.find<std::string>("output", output_file_path);
+
 	// set instruction latencies
 	load_latencies(params);
+
+    // initialize register file
+    registers.fill(0);
 
 	// load the program that is to be executed
 	load_program(params);
@@ -115,16 +121,7 @@ void Core::finish()
     root["reg reads"] = reg_reads;
 	root["stalls"] = stall_count;
     
-    // for (auto const& [op, name] : names) {
-    //     stats[name] = (Json::UInt64)instruction_counts[op]; 
-    // }
-    
-    // stats["instructions"] = (Json::UInt64)total_instructions;
-    // stats["cycles"] = (Json::UInt64)total_cycles;
-    
-    //root["stats"] = stats;
-	std::string output_file_path = "statistics.json";
-    std::ofstream out_file(output_file_path);
+	std::ofstream out_file(output_file_path);
     if (out_file.is_open()) {
         out_file << root; 
         out_file.close();
@@ -339,6 +336,7 @@ void Core::broadcast(int rs_id) {
     }
 }
 
+
 void Core::do_write_register() {
     for (int type = 0; type < FU_TYPE_COUNT; type++) {
         for (auto &fu : fu_pools[type]) {
@@ -354,31 +352,57 @@ void Core::do_write_register() {
             ReservationStation &rs = rs_all[rs_id];
 
             if (type == FU_LS) {
-                // After address computation finishes, simulate memory latency
                 if (!fu.memory_sent) {
                     if (memory_pending) {
-                        // Can't send yet, keep FU busy, add cycle back
-                        fu.cycles_remaining = 0; // check again next cycle
+                        // Can't send yet
+                        fu.cycles_remaining = 0;
                         continue;
                     }
+                    uint16_t instruction = program[rs.instruction_index];
+                    uint16_t opcode = rs.opcode;
+                    uint16_t src2_reg = (instruction >> 2) & 0x07;
+                    
                     memory_pending = true;
+                    memory_pending_rs_id = rs_id;
                     fu.memory_sent = true;
-                    fu.cycles_remaining = 0; // 1 cycle for cache hit (placeholder)
+                    
+                    if (opcode == LW) {
+          
+                        memory_wrapper->read(rs.mem_address, [this, rs_id](uint16_t addr, uint16_t data) {
+                            ReservationStation &rs = rs_all[rs_id];
+                            registers[rs.dest_reg] = data; 
+
+                            broadcast(rs_id); 
+                            memory_op_complete_rs_id = rs_id;  
+                        });
+                    } else if (opcode == SW) {
+         
+                        uint16_t data = registers[src2_reg];
+                        memory_wrapper->write(rs.mem_address, data, [this, rs_id](uint16_t addr) {
+                            broadcast(rs_id);
+                            memory_op_complete_rs_id = rs_id;  
+                        });
+                    }
+                    fu.cycles_remaining = 0;  // Memory operation is pending, callback will handle completion
                     fu.started = false;
                     continue;
                 }
-                // Memory response received — complete the instruction
-                broadcast(rs_id);
-                fu.instructions_executed++;
-                fu.busy = false;
-                fu.rs_id = -1;
-                fu.memory_sent = false;
-                rs.busy = false;
-                memory_pending = false;
-                fu.started = false;
-                // Pop from LS queue
-                if (!ls_queue.empty() && ls_queue.front() == rs_id) {
-                    ls_queue.pop_front();
+                // Check if memory operation completed via callback
+                if (memory_op_complete_rs_id == rs_id) {
+                   
+                    fu.instructions_executed++;
+                    fu.busy = false;
+                    fu.rs_id = -1;
+                    fu.memory_sent = false;
+                    rs.busy = false;
+                    fu.started = false;
+                    memory_pending = false;
+                    memory_pending_rs_id = -1;
+                    memory_op_complete_rs_id = -1;
+                    // Pop from LS queue
+                    if (!ls_queue.empty() && ls_queue.front() == rs_id) {
+                        ls_queue.pop_front();
+                    }
                 }
                 continue;
             }
@@ -386,6 +410,11 @@ void Core::do_write_register() {
             // Non-LS: broadcast and free
             broadcast(rs_id);
             fu.instructions_executed++;
+            
+            // Shadow execution: update register file with computed result
+            uint16_t instruction = program[rs.instruction_index];
+            shadow_execute(instruction, rs.opcode);
+            
             fu.busy = false;
             fu.rs_id = -1;
             rs.busy = false;
@@ -393,6 +422,7 @@ void Core::do_write_register() {
         }
     }
 }
+
 void Core::do_execute() {
     for (int type = 0; type < FU_TYPE_COUNT; type++) {
         for (auto &fu : fu_pools[type]) {
@@ -426,9 +456,16 @@ void Core::do_read_operands() {
             if (ls_queue.empty()) continue;
             int head_id = ls_queue.front();
             ReservationStation &rs = rs_all[head_id];
+        
             if (!rs.busy) continue;
             if (rs.src1_ready != -1 || rs.src2_ready != -1) continue;
             if (is_executing(head_id)) continue;
+
+
+            uint16_t instruction = program[rs.instruction_index];
+            uint16_t opcode = instruction >> 11;
+            uint16_t src1_reg = (instruction >> 5) & 0x07;
+            rs.mem_address = registers[src1_reg]; 
 
             int free_fu = -1;
             for (int f = 0; f < (int)fu_pools[FU_LS].size(); f++) {
@@ -441,7 +478,9 @@ void Core::do_read_operands() {
             fu_pools[FU_LS][free_fu].cycles_remaining = fu_latency[FU_LS] - 1;
             fu_pools[FU_LS][free_fu].rs_id = head_id;
             fu_pools[FU_LS][free_fu].instructions_executed++;
-            //count_reg_reads(rs);
+            memory_pending_rs_id = head_id;
+            std::cout << "Cycle " << cycle_count << ": DISPATCH L/S rs_id=" << head_id 
+                      << " addr=" << rs.mem_address << std::endl;
             continue;
         }
 
@@ -470,9 +509,7 @@ void Core::do_read_operands() {
             fu_pools[type][free_fu].started = false;
             fu_pools[type][free_fu].cycles_remaining = fu_latency[type] - 1;
             fu_pools[type][free_fu].rs_id = rs_id;
-            //fu_pools[type][free_fu].instructions_executed++;
-            //count_reg_reads(rs_all[rs_id]);
-					std::cout << "Cycle " << cycle_count << ": DISPATCH rs_id=" << rs_id 
+			std::cout << "Cycle " << cycle_count << ": DISPATCH rs_id=" << rs_id 
           << " to FU type " << type << std::endl;
         }
 
@@ -496,6 +533,8 @@ void Core::decode_instruction(ReservationStation &rs, uint16_t instruction, uint
         {
             uint16_t rd   = (instruction >> 8) & 0x07;
             uint16_t src1 = (instruction >> 5) & 0x07;
+            // read memory address from register file at issue time
+            rs.mem_address = registers[src1];
             rs.src1_ready = rename_table[src1];
             rs.src2_ready = -1;
             rs.dest_reg = rd;
@@ -595,8 +634,6 @@ void Core::do_issue(){
 	rs.fu_type = type;
 	rs.age = issue_age_counter++;
 	if (type == FU_LS) {
-		uint16_t src_reg = (instruction >> 5) & 0x07;
-		rs.mem_address = registers[src_reg]; // FOR LW/SW This wont work unless register file is maintained
     	ls_queue.push_back(free_rs);  // add to LS queue for in-order issue
 	}
 	 // Determine source and destination registers from the instruction
@@ -630,6 +667,131 @@ bool Core::tick(Cycle_t cycle)
         }
     }
     return terminate;
+}
+
+// basically like the old execute_instruction but only for updating the register file 
+void Core::shadow_execute(uint16_t instruction, uint16_t opcode) {
+    uint16_t rd, rs, rt, imm;
+    
+    switch (opcode) {
+        case ADD: {
+            rd = (instruction >> 8) & 0x07;
+            rs = (instruction >> 5) & 0x07;
+            rt = (instruction >> 2) & 0x07;
+            registers[rd] = registers[rs] + registers[rt];
+            break;
+        }
+        case SUB: {
+            rd = (instruction >> 8) & 0x07;
+            rs = (instruction >> 5) & 0x07;
+            rt = (instruction >> 2) & 0x07;
+            registers[rd] = registers[rs] - registers[rt];
+            break;
+        }
+        case AND: {
+            rd = (instruction >> 8) & 0x07;
+            rs = (instruction >> 5) & 0x07;
+            rt = (instruction >> 2) & 0x07;
+            registers[rd] = registers[rs] & registers[rt];
+            break;
+        }
+        case NOR: {
+            rd = (instruction >> 8) & 0x07;
+            rs = (instruction >> 5) & 0x07;
+            rt = (instruction >> 2) & 0x07;
+            registers[rd] = ~(registers[rs] | registers[rt]);
+            break;
+        }
+        case MUL: {
+            rd = (instruction >> 8) & 0x07;
+            rs = (instruction >> 5) & 0x07;
+            rt = (instruction >> 2) & 0x07;
+            registers[rd] = registers[rs] * registers[rt];
+            break;
+        }
+        case DIV: {
+            rd = (instruction >> 8) & 0x07;
+            rs = (instruction >> 5) & 0x07;
+            rt = (instruction >> 2) & 0x07;
+            if (registers[rt] != 0) {
+                registers[rd] = registers[rs] / registers[rt];
+            } else {
+                registers[rd] = 0;  // avoid divide by zero
+            }
+            break;
+        }
+        case MOD: {
+            rd = (instruction >> 8) & 0x07;
+            rs = (instruction >> 5) & 0x07;
+            rt = (instruction >> 2) & 0x07;
+            if (registers[rt] != 0) {
+                registers[rd] = registers[rs] % registers[rt];
+            } else {
+                registers[rd] = 0;
+            }
+            break;
+        }
+        case EXP: {
+            rd = (instruction >> 8) & 0x07;
+            rs = (instruction >> 5) & 0x07;
+            rt = (instruction >> 2) & 0x07;
+            // EXP: exponentiation
+            uint16_t result = 1;
+            for (int i = 0; i < registers[rt]; i++) {
+                result *= registers[rs];
+            }
+            registers[rd] = result;
+            break;
+        }
+        case LIZ: {
+            rd = (instruction >> 8) & 0x07;
+            imm = instruction & 0x07;
+            registers[rd] = imm;
+            break;
+        }
+        case LIS: {
+            rd = (instruction >> 8) & 0x07;
+            imm = instruction & 0xFF;
+            registers[rd] = imm << 8;
+            break;
+        }
+        case LUI: {
+            rd = (instruction >> 8) & 0x07;
+            imm = instruction & 0xFF;
+            registers[rd] = (registers[rd] & 0xFF) | (imm << 8);
+            break;
+        }
+        case LW: {
+            // Load handled separately during memory completion
+            break;
+        }
+        case SW: {
+            // Store handled in memory_wrapper, no register update
+            break;
+        }
+        case PUT: {
+            // Output instruction, no register update
+            break;
+        }
+        case HALT: {
+            // Halt instruction, no register update
+            break;
+        }
+    }
+}
+
+void Core::memory_complete_callback(int rs_id) {
+    // Called when a memory operation (LW or SW) completes
+    if (rs_id < 0 || rs_id >= (int)rs_all.size()) return;
+    
+    ReservationStation &rs = rs_all[rs_id];
+    
+    // For LW: the value was loaded from memory and is already in memory_pending (needs to be handled by MemoryWrapper)
+    // This callback is called by the memory hierarchy completion
+    
+    // Mark memory operation as no longer pending
+    memory_pending = false;
+    memory_pending_rs_id = -1;
 }
 
 void Core::fetch_instruction()

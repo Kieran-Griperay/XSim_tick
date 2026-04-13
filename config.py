@@ -68,8 +68,8 @@ import sst
 # Add our core to the simulation!
 core = sst.Component("XSim","XSim.Core")
 core.addParams({
-  "clock_frequency": config["clock"],
   "program": args.program,
+  "output": args.output,
   "verbose": 0
 })
 

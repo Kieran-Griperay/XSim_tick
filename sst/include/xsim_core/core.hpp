@@ -60,29 +60,7 @@ class Core: public SST::Component
 			COMPONENT_CATEGORY_PROCESSOR
 		)
 
-		/*
-		{
-					"integer.number": 2,
-					"integer.resnumber": 4,
-					"integer.latency": 1
-					"divider.number": 1,
-					"divider.resnumber": 2,
-					"divider.latency": 20
-					"multiplier.number": 2,
-					"multiplier.resnumber": 4,
-					"multiplier.latency": 10
 
-					"ls.number": 1,
-					"ls.resnumber": 8,
-					"ls.latency": 3
-
-					"cache": {
-						"associativity": 1,
-						"size": "4096B"
-					},
-					"clock":"1GHz"
-					}
-		*/
 
 		SST_ELI_DOCUMENT_PARAMS(
 			{ "integer.number", "(uint) Number of integer units", "2" },
@@ -101,15 +79,7 @@ class Core: public SST::Component
 			{ "cache.size", "(string) Cache size", "4096B" },
 			{ "clock", "(string) Clock frequency", "1GHz" }
 		)
-			// { "verbose", "(uint) Verbosity for debugging. Increased numbers for increased verbosity.", "0" },
-			// { "clock_frequency", "(string) Sets the clock of the core in Hz", "0"} ,
-			// { "program", "(infile) Path to program to be executed by the simulator", "REQUIRED"} ,
-			// { "liz", "(uint) Latency of the liz instruction", "1"} ,
-			// { "put", "(uint) Latency of the put instruction", "1"} ,
-			// { "sw", "(uint) Latency of the sw instruction", "1"} ,
-			// { "lw", "(uint) Latency of the lw instruction", "1"} ,
-			// { "halt", "(uint) Latency of the halt instruction", "1"}
-		//)
+			
 
 		// Statistics for our component
 		SST_ELI_DOCUMENT_STATISTICS(
@@ -158,6 +128,8 @@ class Core: public SST::Component
 		int verbose{0};
 		// The core clock frequency
 		std::string clock_frequency{"0Hz"};
+		// Output file path for statistics
+		std::string output_file_path{"statistics.json"};
 		// The vector with the program instructions
 		std::vector<uint16_t> program;
 		// The map with instruction latencies
@@ -168,6 +140,7 @@ class Core: public SST::Component
 		uint64_t total_cycles = 0;
 		std::map<uint16_t, uint64_t> instruction_counts;
 		uint64_t reg_reads = 0;
+
 
 		/** CPU state **/
 		// The program counter
@@ -225,6 +198,7 @@ class Core: public SST::Component
 		bool memory_pending = false;      // is a memory op currently pending?
 		int memory_pending_rs_id = -1;    // which RS is pending?
 		int memory_pending_fu_idx = -1;   // which FU index in fu_pools[FU_LS]?
+		int memory_op_complete_rs_id = -1; // which RS has memory operation complete?
 		void do_write_register();
 		void do_execute();
 		void do_read_operands();
