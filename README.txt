@@ -1,8 +1,15 @@
+AUTHORS:
+Rafayel Amirkhanyan
+
+Ryan Fusco
+raf172@pitt.edu
+
 Kieran Griperay
 kjg86@pitt.edu
 
-I didnt have many problems, I had some problems with extracting
-the bits from the instructions, because I thought each field was 2 wide
-instead of 3 bits wide. Little blunder there, wasted too much time on that.
+Build: sh build.sh
+Run: sst --add-lib-path build config.py -- --program <programPath> --configuration <configPath> --output <outputPath>
 
-JSON was easier than I thought as well
+Everything should be working, but testing this project was difficult due to its nature. We had issues with our pipeline stages that seemed
+to have been causing most of the uncertainty with testing (sometimes instructions took shorter / longer than they should have when
+there were no memory accesses). We noticed this issue was common when stalling, which led us to realize our pipeline was flipped.
